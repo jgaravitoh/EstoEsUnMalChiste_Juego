@@ -28,11 +28,11 @@ public class CameraSwitcher
     public static void Register(CinemachineCamera _camera)
     {
         cameras.Add(_camera);
-        Debug.Log("Camera registered", _camera);
+        //Debug.Log("Camera registered", _camera);
     }
     public static void Unregister(CinemachineCamera _camera)
     {
         cameras.Remove(_camera);
-        Debug.Log("Camera unregistered", _camera);
+        //Debug.Log("Camera unregistered", _camera);
     }
 }

@@ -37,6 +37,10 @@ public class BattleSystem : MonoBehaviour
 
     // === BAR CAMERAS ===
     private BarRoomCameraHolder barRoomCameraHolder;
+
+    // === WIN/LOSE SCREENS ===
+    [SerializeField]private GameObject screenWin;
+    [SerializeField]private GameObject screenLose;
     #endregion
 
     #region  CORE SETUP AND LOOP FUNCTIONS (Awake, Start, Update, Setup)
@@ -51,7 +55,7 @@ public class BattleSystem : MonoBehaviour
             return;
         }
         Instance = this;
-        DontDestroyOnLoad(this.gameObject); // Optional: makes the instance persist across scenes
+        //DontDestroyOnLoad(this.gameObject); // Optional: makes the instance persist across scenes
     }
 
     // === INITIALIZATION ===
@@ -244,6 +248,7 @@ public class BattleSystem : MonoBehaviour
         {
             SetState(BattleState.PLAYERTURN);
         }
+        list_Units[indexCurrentUnit].camera.transform.gameObject.SetActive(true);
         CameraSwitcher.SwitchCamera(list_Units[indexCurrentUnit].camera);
         
     }
@@ -320,9 +325,10 @@ public class BattleSystem : MonoBehaviour
         Unit targetUnit = hoveredEnemy.GetComponent<Unit>();
         if (bool_PlayerIsPhysicalAttacking) { list_Units[indexCurrentUnit].Action_PhysicalAttack(targetUnit); }
         if (bool_PlayerIsOffensiveAttacking) { list_Units[indexCurrentUnit].Action_OffenseAttack(targetUnit); }
-        yield return new WaitForSeconds(2f);
         
-        NextTurn();
+        StartCoroutine(NextTurn());
+
+        yield return null;
     }
 
 
@@ -330,25 +336,29 @@ public class BattleSystem : MonoBehaviour
     {        
         List<Unit> allyList = GetAliveOponents();
         int attackType = UnityEngine.Random.Range(0,1);
-        int victim = UnityEngine.Random.Range(0,allyList.Count);
-
-        yield return new WaitForSeconds(1f);
+        Unit victim = allyList[UnityEngine.Random.Range(0,allyList.Count)];
+        victim.selectedTriangle.SetActive(true);
+        yield return new WaitForSeconds(2f);
 
         switch (attackType)
         {
             case 0:
-                list_Units[indexCurrentUnit].Action_PhysicalAttack(allyList[victim]);
+                list_Units[indexCurrentUnit].Action_PhysicalAttack(victim);
                 break;
             case 1:
-                list_Units[indexCurrentUnit].Action_OffenseAttack(allyList[victim]);
+                list_Units[indexCurrentUnit].Action_OffenseAttack(victim);
                 break;
             default:
                 Debug.LogError($"Something went wrong, enemy unit could not decide it's attack type | {nameof(attackType)}: {attackType}");
                 break;
         }
         CameraSwitcher.SwitchCamera(barRoomCameraHolder.mainCamera);
-        yield return new WaitForSeconds(2f);
-        NextTurn();
+
+        victim.selectedTriangle.SetActive(false);
+
+        
+        StartCoroutine(NextTurn());
+        yield return null;
     }
 
     private List<Unit> GetAliveOponents()
@@ -371,41 +381,54 @@ public class BattleSystem : MonoBehaviour
 
         return listAlive;
     }
-    public void NextTurn()
+    IEnumerator NextTurn()
     {
-        
+        bool turnInterrupted = false;
+
         int index = 0;
         foreach (Unit unit in list_Units.ToArray())
         {
             if (unit.currentHP <= 0)
             {
-                if (index <= indexCurrentUnit) { indexCurrentUnit--; } //Readjust index
+                if (index <= indexCurrentUnit) { indexCurrentUnit--; } // Readjust index
                 StartCoroutine(unit.Die());
                 RemoveUnitFromList(index);
 
+                // If we detect win/lose condition inside loop later, we can use this flag
             }
             index++;
         }
+
         if (enemyCount <= 0)
         {
             enemyCount = 0;
             SetState(BattleState.WON);
-            //show won screen
-            return;
+            screenWin.SetActive(true);
+            turnInterrupted = true;
         }
         else if (allyCount <= 0)
         {
             allyCount = 0;
             SetState(BattleState.LOST);
-            //show lost screen
-            return;
+            screenLose.SetActive(true);
+            turnInterrupted = true;
         }
+
+        if (turnInterrupted) yield break;
+
         indexCurrentUnit++;
         indexCurrentUnit = indexCurrentUnit % list_Units.Count;
+
+        yield return new WaitForSeconds(2f);
+
         SetStateByCurrentUnitDefinition();
 
-        if (state == BattleState.ENEMYTURN) { StartCoroutine(EnemyAttack()); }
+        if (state == BattleState.ENEMYTURN)
+        {
+            StartCoroutine(EnemyAttack());
+        }
     }
+
 
 
 
