@@ -1,27 +1,27 @@
 using UnityEngine;
 
-public class AdjustHealthBarHeight : MonoBehaviour
+public class AdjustUIComponentRight : MonoBehaviour
 {
     // This code assumes the health bar starts at the center of the sprite
-    private float addedHeight = 0.2f;
+    private float addedPosRight = 1f;
+    private float addedPosUp = 0.5f;
     RectTransform m_RectTransform;
-    private bool calledOnce = false;
     [SerializeField] Renderer spriteRenderer;
     private void Start()
     {
-        ChangeHealthBarHeight();
-        calledOnce = true;
+        ChangeUIComponentRight();
     }
 
     private void OnEnable()
     {
-        if (calledOnce)
-        {
-            ChangeHealthBarHeight();
-        }
+        ChangeUIComponentRight();
+    }
+    private void FixedUpdate()
+    {
+        ChangeUIComponentRight();
     }
 
-    private void ChangeHealthBarHeight()
+    private void ChangeUIComponentRight()
     {
         if (spriteRenderer == null)
         {
@@ -29,12 +29,14 @@ public class AdjustHealthBarHeight : MonoBehaviour
             return;
         }
         // Get the top Y position of the parent object
-        float parentTopY = spriteRenderer.bounds.max.y;
+        float parentTopX = spriteRenderer.bounds.max.x;
+        float parentCenterY = spriteRenderer.bounds.center.y;
         // Set this object's position to be right above the parent
         transform.position = new Vector3(
-            transform.position.x,
-            parentTopY + addedHeight,
+            parentTopX + addedPosRight,
+            parentCenterY + addedPosUp,
             transform.position.z
         );
     }
+
 }

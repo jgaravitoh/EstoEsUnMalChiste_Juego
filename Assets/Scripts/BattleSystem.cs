@@ -1,101 +1,414 @@
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
+using System.Collections;
 
-public enum BattleState { START, PLAYERTURN, ENEMYTURN, WON, LOST }
+
+// Enum representing the current state of the battle
+public enum BattleState { DEFAULT, START, PLAYERTURN, ENEMYTURN, WON, LOST }
+
 public class BattleSystem : MonoBehaviour
 {
+    #region VARIABLES
+    // === SINGLETON INSTANCE ===
+    // Static reference to the one and only instance of BattleSystem
+    public static BattleSystem Instance { get; private set; }
+
+    // === BATTLE STATE ===
     public BattleState state;
 
-    private List<GameObject> list_GameObjectsOnly = new List<GameObject>();
-    private List<Unit> list_Units = new List<Unit>();
-    int enemyCount = 0, allyCount = 0;
+    // === UNIT DATA ===
+    
+    public List<GameObject> list_GameObjectsOnly = new List<GameObject>(); // GameObjects that have Units
+    public List<Unit> list_Units = new List<Unit>();                       // Unit components from those GameObjects
+    public int enemyCount = 0, allyCount = 0;                                      // Used for validation
+    public int indexCurrentUnit = 0;                                               // Used for state changes and turn based actions
+    private GameObject hoveredEnemy;
+    private GameObject lastHoveredEnemy = null;
 
-    // Lists Flags
+    // === VALIDATION FLAGS ===
     private bool bool_IsGameObjectListValidated = false;
     private bool bool_IsUnitListValidated = false;
+
+    // === PLAYER FIGHTING FLAGS ===
+    private bool bool_PlayerIsPhysicalAttacking = false;
+    private bool bool_PlayerIsOffensiveAttacking = false;
+    private bool bool_PlayerPickedTarget = false;
+
+    // === BAR CAMERAS ===
+    private BarRoomCameraHolder barRoomCameraHolder;
+    #endregion
+
+    #region  CORE SETUP AND LOOP FUNCTIONS (Awake, Start, Update, Setup)
+
+    // === SINGLETON ENFORCEMENT ===
+    private void Awake()
+    {
+        // Enforce the singleton pattern
+        if (Instance != null && Instance != this)
+        {
+            Destroy(this.gameObject); // If another instance exists, destroy this one
+            return;
+        }
+        Instance = this;
+        DontDestroyOnLoad(this.gameObject); // Optional: makes the instance persist across scenes
+    }
+
+    // === INITIALIZATION ===
     void Start()
     {
-        state = BattleState.START;
-        SetupBattle(list_GameObjectsOnly);
+        //SetupBattle(list_GameObjectsOnly); // Begins setup using the provided GameObject list
+        SetState(BattleState.DEFAULT);
+        // GETTING THE CAMERAS
+        try
+        {
+            barRoomCameraHolder = FindAnyObjectByType<BarRoomCameraHolder>();
+            if (barRoomCameraHolder == null)
+            {
+                Debug.LogWarning("BarRoomCameraHolder not found in the scene.");
+            }
+        }
+        catch (System.Exception ex)
+        {
+            Debug.LogError("Error while trying to find BarRoomCameraHolder: " + ex.Message);
+        }
     }
-    
+
+    private void Update()
+    {
+        if (state == BattleState.PLAYERTURN)
+        {
+            if (!bool_PlayerIsOffensiveAttacking && !bool_PlayerIsPhysicalAttacking) { list_Units[indexCurrentUnit].ActionButtons.SetActive(true); }
+            if ((bool_PlayerIsOffensiveAttacking || bool_PlayerIsPhysicalAttacking) && !bool_PlayerPickedTarget)
+            {
+                DetectEnemyWithRaycast();
+                list_Units[indexCurrentUnit].ActionButtons.SetActive(false);
+            }
+        }
+    }
+
+    // === MAIN BATTLE SETUP ===
     public void SetupBattle(List<GameObject> _list_GameObjectsOnly)
     {
-        SetUnitList(_list_GameObjectsOnly);
-        
-        for (int i = 0; i < list_GameObjectsOnly.Count; i++) //Setup each unit UI & assing elements to Unit list
-        {
-            Unit unit = list_GameObjectsOnly[i].GetComponent<Unit>();
-            list_Units.Add(unit);
-            unit.healthBar.maxValue = unit.maxHP;
-            unit.healthBar.value = unit.currentHP;
-            unit.selectedTriangle.SetActive(false);            
-        }
-        ValidateUnitList(); // TODO: CHANGE THIS TO A BETTER APPROACH FOR UNIT LIST (only check enemy count and ally count)
-        if (!bool_IsUnitListValidated) { return; }
-        list_Units.Sort((x, y) => x.iniciative.CompareTo(y.iniciative)); //sorts the list by iniciative
+        SetUnitList(_list_GameObjectsOnly); // Clears old data and sets new unit list
+
+        if (!bool_IsUnitListValidated) return;
+
+        // Sort by initiative in descentding order (turn order) 
+        list_Units.Sort((x, y) => y.iniciative.CompareTo(x.iniciative));
+
+        // Clear temp GameObject list
         list_GameObjectsOnly.Clear();
 
+        // Set battle state based on the unit with the most iniciative
+        SetStateByCurrentUnitDefinition();
+        if (state == BattleState.ENEMYTURN) { StartCoroutine(EnemyAttack()); }
     }
+    #endregion
 
+    #region LISTS FUNCTIONS
+    // === RESET ALL STATE ===
     public void ClearListsAndCounters()
     {
         list_GameObjectsOnly.Clear();
         list_Units.Clear();
-        enemyCount = 0; allyCount = 0;
+        enemyCount = 0;
+        allyCount = 0;
     }
 
+    // === VALIDATE GAMEOBJECT LIST ===
     private bool ValidateGameObjectList()
     {
         bool_IsGameObjectListValidated = true;
-        if (list_GameObjectsOnly.Count < 1) { Debug.LogError($"{nameof(list_GameObjectsOnly)} is empty, did you forget to fill it from another script?"); bool_IsGameObjectListValidated = false; }
-        if (list_GameObjectsOnly.Count < 2)  { Debug.LogError($"Cannot set up a battle if { nameof(list_GameObjectsOnly) } doesn't have at least two unit game objects | did you forget to fill the list correctly?"); bool_IsGameObjectListValidated = false; }
+
+        if (list_GameObjectsOnly.Count < 1)
+        {
+            Debug.LogError($"{nameof(list_GameObjectsOnly)} is empty. Did you forget to assign it?");
+            bool_IsGameObjectListValidated = false;
+        }
+
+        if (list_GameObjectsOnly.Count < 2)
+        {
+            Debug.LogError($"{nameof(list_GameObjectsOnly)} must contain at least two units.");
+            bool_IsGameObjectListValidated = false;
+        }
+
         return bool_IsGameObjectListValidated;
     }
+
+    // === VALIDATE UNIT LIST (ALLY/ENEMY COUNT) ===
     public bool ValidateUnitList()
     {
+        enemyCount = 0;
+        allyCount = 0;
+
         foreach (Unit unit in list_Units)
         {
-            if (unit.boolIsEnemy) { enemyCount++; } else { allyCount++; }
+            if (unit.boolIsEnemy) enemyCount++;
+            else allyCount++;
         }
+
         if (enemyCount < 1 || allyCount < 1)
         {
-            Debug.LogWarning($"Cannot set up a battle if there are no Allies or Enemies | { nameof(list_Units) } has not enough objects with boolIsEnemy set to true or false");
+            Debug.LogWarning("Not enough allies or enemies to start battle.");
             bool_IsUnitListValidated = false;
-            return bool_IsUnitListValidated;
+            return false;
         }
+
         bool_IsUnitListValidated = true;
-        return bool_IsUnitListValidated;
+        return true;
     }
+
+    // === SET NEW GAMEOBJECT LIST ===
     public void SetUnitList(List<GameObject> _list_GameObjectsOnly)
     {
-        ClearListsAndCounters();
-        ValidateGameObjectList();
-        if (!bool_IsGameObjectListValidated) { return; }
+        ClearListsAndCounters(); // Reset
         list_GameObjectsOnly = _list_GameObjectsOnly;
+
+        if (!ValidateGameObjectList()) return;
+        // Initialize unit data
+        for (int i = 0; i < list_GameObjectsOnly.Count; i++)
+        {
+            Unit unit = list_GameObjectsOnly[i].GetComponent<Unit>();
+            list_Units.Add(unit);
+        }
+
+
         ValidateUnitList();
-    }
-    public List<Unit> GetUnitList() 
-    {
-        ValidateUnitList();
-        return list_Units; 
     }
 
+    // === ACCESSOR: GET CURRENT UNIT LIST ===
+    public List<Unit> GetUnitList()
+    {
+        ValidateUnitList(); // Ensure list is up-to-date
+        return list_Units;
+    }
+
+    // === ADD A SINGLE UNIT (e.g., reinforcement) ===
     public void AddUnitToList(GameObject _unitGameObject)
     {
-        list_Units.Add(_unitGameObject.GetComponent<Unit>());
-        list_Units.Sort((x, y) => x.iniciative.CompareTo(y.iniciative)); //sorts the list by iniciative
+        Unit _unit = _unitGameObject.GetComponent<Unit>();
+        list_Units.Add(_unit);
+
+        _unit.healthBar.maxValue = _unit.maxHP;
+        _unit.healthBar.value = _unit.currentHP;
+        _unit.selectedTriangle.SetActive(false);
+
+        list_Units.Sort((x, y) => x.iniciative.CompareTo(y.iniciative)); // Keep initiative order
         ValidateUnitList();
     }
 
+    // === ADD MULTIPLE UNITS AT ONCE ===
     public void AddUnitsToList(List<GameObject> _unitGameObjectList)
     {
+        Unit _unit;
         foreach (GameObject _unitGameObject in _unitGameObjectList)
         {
             list_Units.Add(_unitGameObject.GetComponent<Unit>());
+
+            _unit = _unitGameObject.GetComponent<Unit>();
+            _unit.healthBar.maxValue = _unit.maxHP;
+            _unit.healthBar.value = _unit.currentHP;
+            _unit.selectedTriangle.SetActive(false);
         }
+        list_Units.Sort((x, y) => x.iniciative.CompareTo(y.iniciative));
         ValidateUnitList();
-        list_Units.Sort((x, y) => x.iniciative.CompareTo(y.iniciative)); //sorts the list by iniciative
     }
+
+    public void RemoveUnitFromList(int _indexToRemove) 
+    {
+        Unit unit = list_Units[_indexToRemove];
+        if (unit.boolIsEnemy) { enemyCount--; }
+        else { allyCount--; }
+        list_Units.RemoveAt(_indexToRemove);
+    }
+    #endregion
+
+    #region SET STATE FUNCTIONS
+    public void SetState(BattleState _state)
+    {
+        state = _state;
+    }
+
+    public void SetStateByCurrentUnitDefinition()
+    {
+        bool_PlayerIsOffensiveAttacking = false;
+        bool_PlayerIsPhysicalAttacking = false;
+        bool_PlayerPickedTarget = false;
+
+        if (list_Units[indexCurrentUnit].boolIsEnemy)
+        {
+            SetState(BattleState.ENEMYTURN);
+        }
+        else
+        {
+            SetState(BattleState.PLAYERTURN);
+        }
+        CameraSwitcher.SwitchCamera(list_Units[indexCurrentUnit].camera);
+        
+    }
+    #endregion
+
+    #region UNIT TURN FUNCTIONS  ( Raycast selection, Buttons, Player and Enemy Attack, List of Alive Oponents and Next Turn Function )
+    void DetectEnemyWithRaycast()
+    {
+        hoveredEnemy = null;
+
+        Ray ray = Camera.main.ScreenPointToRay(Input.mousePosition);
+        RaycastHit hit;
+
+        if (Physics.Raycast(ray, out hit))
+        {
+            if (hit.collider.CompareTag("Enemy"))
+            {
+                hoveredEnemy = hit.collider.gameObject;
+
+                // If we changed enemy, disable the triangle on the previous one
+                if (hoveredEnemy != lastHoveredEnemy)
+                {
+                    if (lastHoveredEnemy != null)
+                    {
+                        lastHoveredEnemy.GetComponent<Unit>().selectedTriangle.SetActive(false);
+                    }
+
+                    // Enable the triangle on the new one
+                    hoveredEnemy.GetComponent<Unit>().selectedTriangle.SetActive(true);
+                    lastHoveredEnemy = hoveredEnemy;
+                }
+
+                // If left click, perform attack
+                if (Input.GetMouseButtonDown(0))
+                {
+                    StartCoroutine(PlayerAttack());
+                }
+
+                return; // Early return so we don't disable the triangle right after
+            }
+        }
+        // If we're here, we're not hovering any enemy — turn off triangle if one was previously on
+        if (lastHoveredEnemy != null)
+        {
+            lastHoveredEnemy.GetComponent<Unit>().selectedTriangle.SetActive(false);
+            lastHoveredEnemy = null;
+        }
+    }
+
+    public void OnPhysicalAttackButton()
+    {
+        if (state != BattleState.PLAYERTURN)
+        {
+            return;
+        }
+        bool_PlayerIsPhysicalAttacking = true;
+    }
+    public void OnOffenseAttackButton()
+    {
+        if (state != BattleState.PLAYERTURN)
+        {
+            return;
+        }
+        bool_PlayerIsOffensiveAttacking = true;
+    }
+
+    IEnumerator PlayerAttack()
+    {
+                   
+        CameraSwitcher.SwitchCamera(barRoomCameraHolder.mainCamera); // If we are in the bar change to its main camera
+        
+        bool_PlayerPickedTarget = true;
+
+        Unit targetUnit = hoveredEnemy.GetComponent<Unit>();
+        if (bool_PlayerIsPhysicalAttacking) { list_Units[indexCurrentUnit].Action_PhysicalAttack(targetUnit); }
+        if (bool_PlayerIsOffensiveAttacking) { list_Units[indexCurrentUnit].Action_OffenseAttack(targetUnit); }
+        yield return new WaitForSeconds(2f);
+        
+        NextTurn();
+    }
+
+
+    IEnumerator EnemyAttack()
+    {        
+        List<Unit> allyList = GetAliveOponents();
+        int attackType = UnityEngine.Random.Range(0,1);
+        int victim = UnityEngine.Random.Range(0,allyList.Count);
+
+        yield return new WaitForSeconds(1f);
+
+        switch (attackType)
+        {
+            case 0:
+                list_Units[indexCurrentUnit].Action_PhysicalAttack(allyList[victim]);
+                break;
+            case 1:
+                list_Units[indexCurrentUnit].Action_OffenseAttack(allyList[victim]);
+                break;
+            default:
+                Debug.LogError($"Something went wrong, enemy unit could not decide it's attack type | {nameof(attackType)}: {attackType}");
+                break;
+        }
+        CameraSwitcher.SwitchCamera(barRoomCameraHolder.mainCamera);
+        yield return new WaitForSeconds(2f);
+        NextTurn();
+    }
+
+    private List<Unit> GetAliveOponents()
+    {
+        List<Unit> listAlive = new List<Unit>();
+        if (list_Units[indexCurrentUnit].boolIsEnemy) // if unit is enemy get players
+        {
+            foreach (Unit unit in list_Units)
+            {
+                if (!unit.boolIsEnemy) listAlive.Add(unit);
+            }
+        }
+        else // else get enemies
+        {
+            foreach (Unit unit in list_Units)
+            {
+                if (unit.boolIsEnemy) listAlive.Add(unit);
+            }
+        }
+
+        return listAlive;
+    }
+    public void NextTurn()
+    {
+        
+        int index = 0;
+        foreach (Unit unit in list_Units.ToArray())
+        {
+            if (unit.currentHP <= 0)
+            {
+                if (index <= indexCurrentUnit) { indexCurrentUnit--; } //Readjust index
+                StartCoroutine(unit.Die());
+                RemoveUnitFromList(index);
+
+            }
+            index++;
+        }
+        if (enemyCount <= 0)
+        {
+            enemyCount = 0;
+            SetState(BattleState.WON);
+            //show won screen
+            return;
+        }
+        else if (allyCount <= 0)
+        {
+            allyCount = 0;
+            SetState(BattleState.LOST);
+            //show lost screen
+            return;
+        }
+        indexCurrentUnit++;
+        indexCurrentUnit = indexCurrentUnit % list_Units.Count;
+        SetStateByCurrentUnitDefinition();
+
+        if (state == BattleState.ENEMYTURN) { StartCoroutine(EnemyAttack()); }
+    }
+
+
+
+    #endregion
+
 }

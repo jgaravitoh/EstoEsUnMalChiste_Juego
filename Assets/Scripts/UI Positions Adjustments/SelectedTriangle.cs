@@ -2,7 +2,7 @@ using UnityEngine;
 using UnityEngine.Rendering;
 using UnityEngine.UI;
 
-public class SelectedTrianlge : MonoBehaviour
+public class SelectedTriangle : MonoBehaviour
 {
     private string colorGreen = "#7FE144";
     private string colorRed = "#E14444";
@@ -45,7 +45,7 @@ public class SelectedTrianlge : MonoBehaviour
         );
     }
 
-    private void Update()
+    private void FixedUpdate()
     {
         // Apply vertical bouncing effect based on sine wave
         float bounceOffset = Mathf.Sin(Time.time * bounceFrequency) * bounceAmplitude;
